@@ -1,0 +1,12 @@
+*.db
+*.pkl
+*.txt
+*.json
+__pycache__/
+*.pyc
+venv/
+.env
+backups/
+*.log
+*.zip
+.DS_Store
