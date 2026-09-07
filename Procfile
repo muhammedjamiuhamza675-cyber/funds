@@ -1,1 +1,1 @@
-worker: python ig.py
+worker: python funds.py
