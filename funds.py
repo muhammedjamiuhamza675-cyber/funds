@@ -2430,38 +2430,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =================================================================================
 
 def main():
-    # Create application
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    # Command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("withdraw", withdraw_command))
-    
-    # Callback handler
     app.add_handler(CallbackQueryHandler(callback_handler))
-    
-    # Message handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_photo))
-    
-    print("="*60)
-    print("📱 IG SHOP BOT RUNNING!")
-    print(f"👑 Admin ID: {ADMIN_ID}")
-    print(f"🤖 Bot: @{BOT_USERNAME}")
-    print("="*60)
-    print("📱 FEATURES:")
-    print("   • Email Only accounts")
-    print("   • Email + Password accounts (+₦500)")
-    print("   • Cart system for bulk purchases")
-    print("   • Complete admin panel")
-    print("   • Stock management (restock, clear, extract)")
-    print("   • Admin can add email+password manually")
-    print("="*60)
-    print("🚀 BOT RUNNING...")
-    print("="*60)
-    
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
