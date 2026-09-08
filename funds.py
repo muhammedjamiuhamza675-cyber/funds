@@ -62,7 +62,7 @@ def get_product_display(amount, with_password=False):
 # DATABASE
 # =================================================================================
 
-DB_PATH = os.environ.get("DB_PATH", "/data/ig_bot.db")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "ig_bot.db"))
 
 def init_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
