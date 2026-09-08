@@ -13,15 +13,15 @@ import os
 import re
 import datetime
 from telegram import *
-from telegram.ext import *
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 
 # =================================================================================
 # CONFIGURATION
 # =================================================================================
 
-BOT_TOKEN = "8414986694:AAFaubQgLIpwROLwE8QQl7PaR6WOeVH8uKA"
+BOT_TOKEN = "8857671587:AAFKa4LZVj7_H1Sjzqn1JK1S4WrCyaU8TMc"
 ADMIN_ID = 7443685686
-BOT_USERNAME = "your_ig_bot_username"
+BOT_USERNAME = "Hamzzylogs01_bot"
 
 BANK_NAME = "OPAY"
 ACCOUNT_NUMBER = "9032741650"
@@ -62,7 +62,7 @@ def get_product_display(amount, with_password=False):
 # DATABASE
 # =================================================================================
 
-DB_PATH = "ig_bot.db"
+DB_PATH = os.environ.get("DB_PATH", "/data/ig_bot.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
