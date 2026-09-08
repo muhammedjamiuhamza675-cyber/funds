@@ -2430,15 +2430,51 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =================================================================================
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("cancel", cancel))
-    app.add_handler(CommandHandler("withdraw", withdraw_command))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_photo))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    """Run the bot"""
+    try:
+        # Create application
+        app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+        # Command handlers
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("cancel", cancel))
+        app.add_handler(CommandHandler("withdraw", withdraw_command))
+        app.add_handler(CommandHandler("balance", admin_view_balance_start))
+        app.add_handler(CommandHandler("addfund", admin_add_funds_start))
+        app.add_handler(CommandHandler("deduct", admin_deduct_funds_start))
+        app.add_handler(CommandHandler("ban", ban_user))
+        app.add_handler(CommandHandler("unban", unban_user))
+
+        # Callback handler
+        app.add_handler(CallbackQueryHandler(callback_handler))
+
+        # Message handlers
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        app.add_handler(MessageHandler(filters.Document.ALL, handle_photo))
+
+        print("="*60)
+        print("📱 IG SHOP BOT RUNNING!")
+        print(f"👑 Admin ID: {ADMIN_ID}")
+        print(f"🤖 Bot: @{BOT_USERNAME}")
+        print("="*60)
+        print("📱 FEATURES:")
+        print("   • Email Only accounts")
+        print("   • Email + Password accounts (+₦500)")
+        print("   • Cart system for bulk purchases")
+        print("   • Complete admin panel")
+        print("   • Stock management (restock, clear, extract)")
+        print("   • Admin can add email+password manually")
+        print("="*60)
+        print("🚀 BOT RUNNING...")
+        print("="*60)
+
+        # Start the bot
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
+        
+    except Exception as e:
+        print(f"❌ Error starting bot: {e}")
+        raise e
 
 if __name__ == "__main__":
     main()
