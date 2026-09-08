@@ -4,6 +4,11 @@ HAMZZY IG SHOP - COMPLETE STANDALONE BOT
 - Password option: +₦500 to price
 - Admin manually adds email + password
 - Full working telepython bot
+- Fixed: IG with Password purchase
+- Fixed: Approve flow uses user's amount
+- Fixed: Withdraw flow
+- Fixed: Duplicate stock check
+- Fixed: Product validation in restock
 """
 
 import sqlite3
@@ -50,13 +55,6 @@ IG_PRODUCTS = {
     "900": 8000,
     "1000": 8500
 }
-
-# Product display names with price
-def get_product_display(amount, with_password=False):
-    price = IG_PRODUCTS[amount]
-    if with_password:
-        price += PASSWORD_EXTRA
-    return f"{amount} followers - ₦{price}"
 
 # =================================================================================
 # DATABASE
@@ -235,11 +233,16 @@ def mark_ig_sold(item_id, user_id, require_password=False):
 def add_ig_stock(product_name, email, admin_id, password=None):
     """Add IG stock - can be email only or with password"""
     if password:
-        # Add to password table
+        # Check if already exists
+        cursor.execute("SELECT id FROM ig_stock_password WHERE email=? AND status='available'", (email,))
+        if cursor.fetchone():
+            return False
         cursor.execute("INSERT INTO ig_stock_password (product_name, email, password, added_by, added_date, status) VALUES (?, ?, ?, ?, ?, 'available')",
                        (product_name, email, password, admin_id, datetime.datetime.now().isoformat()))
     else:
-        # Add to email only table
+        cursor.execute("SELECT id FROM ig_stock WHERE email=? AND status='available'", (email,))
+        if cursor.fetchone():
+            return False
         cursor.execute("INSERT INTO ig_stock (product_name, email, added_by, added_date, status) VALUES (?, ?, ?, ?, 'available')",
                        (product_name, email, admin_id, datetime.datetime.now().isoformat()))
     conn.commit()
@@ -433,20 +436,57 @@ async def fund(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     ref = generate_ref()
     context.user_data["fund_ref"] = ref
-    context.user_data["awaiting_name"] = True
+    context.user_data["awaiting_amount"] = True
+    
     await update.message.reply_text(
-        f"💳 **FUND YOUR WALLET**\n\n"
-        f"🏦 {BANK_NAME}\n"
-        f"🔢 {ACCOUNT_NUMBER}\n"
-        f"👤 {ACCOUNT_NAME}\n\n"
-        f"🆔 {ref}\n\n"
-        f"📝 Send SENDER NAME first.\n\n"
+        f"💰 **FUND YOUR WALLET**\n\n"
+        f"📝 Step 1: Enter the AMOUNT you want to deposit:\n\n"
+        f"Example: `5000` or `10000`\n\n"
+        f"Minimum: ₦{MIN_DEPOSIT}\n\n"
         f"Type /cancel to cancel.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ I've Made Payment", callback_data=f"pay:{ref}")]
-        ]),
         parse_mode='HTML'
     )
+
+async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text
+    
+    if not context.user_data.get("awaiting_amount"):
+        return
+    
+    try:
+        amount = int(text)
+        if amount < MIN_DEPOSIT:
+            await update.message.reply_text(
+                f"❌ Minimum deposit is ₦{MIN_DEPOSIT}!\n\n"
+                f"Please enter a valid amount:",
+                parse_mode='HTML'
+            )
+            return
+        
+        context.user_data["fund_amount"] = amount
+        context.user_data["awaiting_amount"] = False
+        
+        ref = context.user_data.get("fund_ref", generate_ref())
+        
+        await update.message.reply_text(
+            f"💳 **FUND YOUR WALLET**\n\n"
+            f"🏦 {BANK_NAME}\n"
+            f"🔢 {ACCOUNT_NUMBER}\n"
+            f"👤 {ACCOUNT_NAME}\n\n"
+            f"💰 Amount: ₦{amount}\n"
+            f"🆔 Ref: {ref}\n\n"
+            f"📝 Step 2: Send SENDER NAME (the name used for payment):\n\n"
+            f"Type /cancel to cancel.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ I've Made Payment", callback_data=f"pay:{ref}")]
+            ]),
+            parse_mode='HTML'
+        )
+        context.user_data["awaiting_name"] = True
+        
+    except ValueError:
+        await update.message.reply_text("❌ Invalid amount! Enter a number.", parse_mode='HTML')
 
 # =================================================================================
 # CHECK STOCK
@@ -467,7 +507,6 @@ async def user_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         status = "✅" if total > 0 else "❌"
         
-        # Show product with both options in one line
         msg += f"{status} {name} followers\n"
         msg += f"   📧 {email_count} @ ₦{price}  |  🔐 {pass_count} @ ₦{price_with_pass}\n"
         msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -764,14 +803,19 @@ async def buy_product_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     data = query.data.replace("buy_", "")
     parts = data.rsplit("_", 1)
     if len(parts) != 2:
+        await query.answer("❌ Invalid product!", show_alert=True)
         return
+    
     product_name, has_password = parts[0], int(parts[1])
     
     if product_name not in IG_PRODUCTS:
+        await query.answer(f"❌ Product '{product_name}' not found!", show_alert=True)
         return
     
     price = get_product_price(product_name, has_password)
-    if get_ig_stock_count(product_name, require_password=has_password) == 0:
+    stock_count = get_ig_stock_count(product_name, require_password=has_password)
+    
+    if stock_count == 0:
         await query.answer("❌ Out of stock!", show_alert=True)
         return
     
@@ -805,13 +849,17 @@ async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAUL
     data = query.data.replace("confirm_", "")
     parts = data.rsplit("_", 1)
     if len(parts) != 2:
+        await query.answer("❌ Invalid product!", show_alert=True)
         return
+    
     product_name, has_password = parts[0], int(parts[1])
     
     if product_name not in IG_PRODUCTS:
+        await query.answer(f"❌ Product '{product_name}' not found!", show_alert=True)
         return
     
     price = get_product_price(product_name, has_password)
+    
     if get_balance(user_id) < price:
         await query.answer("❌ Insufficient funds!", show_alert=True)
         return
@@ -1087,7 +1135,8 @@ async def admin_pending_deposits(update: Update, context: ContextTypes.DEFAULT_T
                 caption=f"💳 **PENDING DEPOSIT**\n\n"
                         f"👤 User: {uid}\n"
                         f"🏦 {data['sender_name']}\n"
-                        f"🔢 {data['ref']}",
+                        f"🔢 {data['ref']}\n"
+                        f"💰 Amount: ₦{data.get('amount', 0)}",
                 reply_markup=InlineKeyboardMarkup(kb),
                 parse_mode='HTML'
             )
@@ -1484,6 +1533,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         sender_name = context.user_data.get("sender_name", "Unknown")
         ref = context.user_data.get("payment_ref", generate_ref())
+        amount = context.user_data.get("fund_amount", 0)
         
         try:
             cursor.execute("INSERT INTO deposits (user_id, sender_name, ref, status) VALUES (?, ?, ?, 'pending')",
@@ -1495,7 +1545,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "photo_id": photo_id,
                 "ref": ref,
                 "username": update.message.from_user.username,
-                "full_name": update.message.from_user.full_name
+                "full_name": update.message.from_user.full_name,
+                "amount": amount
             }
             
             kb = [
@@ -1510,7 +1561,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"📛 @{update.message.from_user.username or 'N/A'}\n"
                         f"🆔 {user_id}\n"
                         f"🏦 {sender_name}\n"
-                        f"🔢 {ref}",
+                        f"🔢 {ref}\n"
+                        f"💰 Amount: ₦{amount}",
                 reply_markup=InlineKeyboardMarkup(kb),
                 parse_mode='HTML'
             )
@@ -1576,6 +1628,13 @@ async def handle_restock_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not product_name:
         return
     
+    # Check if product exists
+    if product_name not in IG_PRODUCTS:
+        await update.message.reply_text("❌ Invalid product!")
+        context.user_data["awaiting_restock_file"] = False
+        context.user_data["restock_product"] = None
+        return
+    
     try:
         file = await update.message.document.get_file()
         content = await file.download_as_bytearray()
@@ -1596,12 +1655,10 @@ async def handle_restock_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 password = parts[1].strip()
                 if email and '@' in email and password:
                     with_password.append((email, password))
-                    print(f"✅ Added with password: {email}")
             else:
                 # Email only
                 if line and '@' in line:
                     email_only.append(line)
-                    print(f"✅ Added email only: {line}")
         
         if not email_only and not with_password:
             await update.message.reply_text(
@@ -1665,6 +1722,13 @@ async def handle_restock_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not product_name:
         return
     
+    # Check if product exists
+    if product_name not in IG_PRODUCTS:
+        await update.message.reply_text("❌ Invalid product!")
+        context.user_data["awaiting_restock_file"] = False
+        context.user_data["restock_product"] = None
+        return
+    
     text = update.message.text.strip()
     
     try:
@@ -1683,12 +1747,10 @@ async def handle_restock_text(update: Update, context: ContextTypes.DEFAULT_TYPE
                 password = parts[1].strip()
                 if email and '@' in email and password:
                     with_password.append((email, password))
-                    print(f"✅ Added with password: {email}")
             else:
                 # Email only
                 if line and '@' in line:
                     email_only.append(line)
-                    print(f"✅ Added email only: {line}")
         
         if not email_only and not with_password:
             await update.message.reply_text(
@@ -1747,6 +1809,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 You are banned!")
         return
     
+    # ===== WITHDRAW FLOW =====
+    if context.user_data.get("awaiting_withdraw"):
+        await process_withdraw(update, context)
+        return
+    
     # Support mode
     if user_support_mode.get(user_id):
         await handle_support_message(update, context)
@@ -1762,7 +1829,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Funding flow
+    # ===== FUNDING FLOW =====
+    if context.user_data.get("awaiting_amount"):
+        await handle_amount_input(update, context)
+        return
+    
     if context.user_data.get("awaiting_name"):
         context.user_data["sender_name"] = text
         context.user_data["awaiting_name"] = False
@@ -1940,47 +2011,55 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("awaiting_broadcast", None)
             return
         
-        # Approve deposit amount
+        # Approve deposit amount - FIXED: Auto-approve with stored amount
         if context.user_data.get("approving_user"):
-            try:
-                amount = int(text)
-                target_id = context.user_data.pop("approving_user")
-                
-                if target_id not in pending_approvals:
-                    await update.message.reply_text("⚠️ Already processed!")
-                    return
-                
-                info = pending_approvals[target_id]
-                old_bal = get_balance(target_id)
-                update_wallet(target_id, amount)
-                cursor.execute("UPDATE deposits SET amount=?, status='approved' WHERE ref=?", (amount, info.get('ref')))
-                conn.commit()
-                log_transaction(target_id, "credit", amount, "deposit_approved")
-                new_bal = get_balance(target_id)
-                
-                try:
-                    await context.bot.send_message(
-                        target_id,
-                        f"✅ **PAYMENT APPROVED!**\n\n"
-                        f"💰 Amount: ₦{amount}\n"
-                        f"💳 Previous: ₦{old_bal}\n"
-                        f"💳 New: ₦{new_bal}\n\n"
-                        f"Thank you! You can now purchase products.",
-                        parse_mode='HTML'
-                    )
-                except:
-                    pass
-                
-                await update.message.reply_text(
-                    f"✅ Approved ₦{amount} for user {target_id}\n"
-                    f"💳 {old_bal} → {new_bal}",
-                    parse_mode='HTML'
-                )
+            target_id = context.user_data.pop("approving_user")
+            
+            if target_id not in pending_approvals:
+                await update.message.reply_text("⚠️ Already processed!")
+                return
+            
+            info = pending_approvals[target_id]
+            amount = info.get("amount", 0)
+            ref = info.get("ref", "")
+            
+            if amount <= 0:
+                await update.message.reply_text("❌ No amount found! User must specify amount.")
                 pending_approvals.pop(target_id, None)
                 return
+            
+            # Process approval
+            old_bal = get_balance(target_id)
+            update_wallet(target_id, amount)
+            cursor.execute("UPDATE deposits SET amount=?, status='approved' WHERE ref=?", (amount, ref))
+            conn.commit()
+            log_transaction(target_id, "credit", amount, "deposit_approved")
+            new_bal = get_balance(target_id)
+            
+            # Notify user
+            try:
+                await context.bot.send_message(
+                    target_id,
+                    f"✅ **PAYMENT APPROVED!**\n\n"
+                    f"💰 Amount: ₦{amount}\n"
+                    f"💳 Previous: ₦{old_bal}\n"
+                    f"💳 New: ₦{new_bal}\n\n"
+                    f"Thank you! You can now purchase products.",
+                    parse_mode='HTML'
+                )
             except:
-                await update.message.reply_text("❌ Invalid amount! Send a number.")
-                return
+                pass
+            
+            await update.message.reply_text(
+                f"✅ **PAYMENT APPROVED!**\n\n"
+                f"👤 User: {target_id}\n"
+                f"💰 Amount: ₦{amount}\n"
+                f"💳 {old_bal} → {new_bal}",
+                parse_mode='HTML'
+            )
+            
+            pending_approvals.pop(target_id, None)
+            return
         
         # Decline deposit reason
         if context.user_data.get("declining_user"):
@@ -2063,8 +2142,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ Invalid ID!")
             context.user_data.pop("awaiting_unblock_user", None)
             return
-    
-    # ... rest of code (menu buttons, etc.)
     
     # ===== MENU BUTTONS =====
     if text == "💰 Wallet":
@@ -2375,17 +2452,52 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Admin - Approve/Reject
+    # Admin - Approve - FIXED: Auto-approve with stored amount
     if data.startswith("approve:"):
         target_id = int(data.replace("approve:", ""))
         if target_id not in pending_approvals:
             await query.answer("⚠️ Already processed!", show_alert=True)
             return
-        context.user_data["approving_user"] = target_id
+        
+        info = pending_approvals[target_id]
+        amount = info.get("amount", 0)
+        ref = info.get("ref", "")
+        
+        if amount <= 0:
+            await query.answer("❌ No amount found!", show_alert=True)
+            return
+        
+        # Process approval
+        old_bal = get_balance(target_id)
+        update_wallet(target_id, amount)
+        cursor.execute("UPDATE deposits SET amount=?, status='approved' WHERE ref=?", (amount, ref))
+        conn.commit()
+        log_transaction(target_id, "credit", amount, "deposit_approved")
+        new_bal = get_balance(target_id)
+        
+        # Notify user
+        try:
+            await context.bot.send_message(
+                target_id,
+                f"✅ **PAYMENT APPROVED!**\n\n"
+                f"💰 Amount: ₦{amount}\n"
+                f"💳 Previous: ₦{old_bal}\n"
+                f"💳 New: ₦{new_bal}\n\n"
+                f"Thank you! You can now purchase products.",
+                parse_mode='HTML'
+            )
+        except:
+            pass
+        
         await query.edit_message_text(
-            f"💰 **APPROVE DEPOSIT**\n\nUser: {target_id}\n\nSend amount (e.g., 5000):\n/back to abort",
+            f"✅ **PAYMENT APPROVED!**\n\n"
+            f"👤 User: {target_id}\n"
+            f"💰 Amount: ₦{amount}\n"
+            f"💳 {old_bal} → {new_bal}",
             parse_mode='HTML'
         )
+        
+        pending_approvals.pop(target_id, None)
         return
     
     if data.startswith("reject:"):
@@ -2465,6 +2577,10 @@ def main():
         print("   • Complete admin panel")
         print("   • Stock management (restock, clear, extract)")
         print("   • Admin can add email+password manually")
+        print("   • Fixed: IG with Password purchase")
+        print("   • Fixed: Approve flow uses user's amount")
+        print("   • Fixed: Withdraw flow")
+        print("   • Fixed: Duplicate stock check")
         print("="*60)
         print("🚀 BOT RUNNING...")
         print("="*60)
