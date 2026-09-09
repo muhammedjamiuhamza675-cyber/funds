@@ -130,7 +130,10 @@ cursor = conn.cursor()
 def get_balance(user_id):
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
     r = cursor.fetchone()
-    return r[0] if r else 0
+    if r is None:
+        add_user(user_id)
+        return 0
+    return r[0]
 
 def add_user(user_id, username=None, first_name=None):
     cursor.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, balance, join_date, last_active) VALUES (?, ?, ?, 0, ?, ?)",
@@ -688,10 +691,11 @@ async def refer_earn_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # =================================================================================
-# BUY PRODUCTS
+# BUY PRODUCTS - COMPLETE FIXED SECTION
 # =================================================================================
 
 async def buy_products_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show buy products menu with categories"""
     kb = [
         [InlineKeyboardButton("📧 Small (0-100)", callback_data="cat_small")],
         [InlineKeyboardButton("📧 Medium (200-500)", callback_data="cat_medium")],
@@ -707,11 +711,22 @@ async def buy_products_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
+
 async def product_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle category selection - shows products with buy/add to cart buttons"""
     query = update.callback_query
-    await query.answer()
+    user_id = query.from_user.id
+    
+    print(f"🔍 CATEGORY CALLBACK: {query.data}")
+    
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"❌ Error answering: {e}")
+    
     data = query.data.replace("cat_", "")
     
+    # Determine which products to show
     if data == "small":
         products = {k: v for k, v in IG_PRODUCTS.items() if v <= 3000}
         title = "SMALL (0-100)"
@@ -725,15 +740,20 @@ async def product_category_callback(update: Update, context: ContextTypes.DEFAUL
         products = IG_PRODUCTS
         title = "ALL"
     
+    print(f"🔍 Showing {len(products)} products for {title}")
+    
     msg = f"**{title}**\n\n"
     msg += "📧 Email Only | 🔐 Email + Password (+₦500)\n"
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     msg += "🛒 Click to BUY NOW | 🛒➕ Click to ADD TO CART\n\n"
     kb = []
+    
     for name, price in products.items():
         email_only_count = get_ig_stock_count(name, require_password=False)
         with_pass_count = get_ig_stock_count(name, require_password=True)
         price_with_pass = price + PASSWORD_EXTRA
+        
+        print(f"🔍 Product: {name}, Email: {email_only_count}, Password: {with_pass_count}")
         
         # Email only row
         msg += f"📧 {name} followers - ₦{price} [{email_only_count} in stock]\n"
@@ -741,6 +761,10 @@ async def product_category_callback(update: Update, context: ContextTypes.DEFAUL
             kb.append([
                 InlineKeyboardButton(f"📧 BUY {name}", callback_data=f"buy_{name}_0"),
                 InlineKeyboardButton(f"➕ Cart", callback_data=f"addcart_{name}_0")
+            ])
+        else:
+            kb.append([
+                InlineKeyboardButton(f"❌ {name} (Out of stock)", callback_data="noop")
             ])
         
         # Email + Password row
@@ -750,36 +774,62 @@ async def product_category_callback(update: Update, context: ContextTypes.DEFAUL
                 InlineKeyboardButton(f"🔐 BUY {name}", callback_data=f"buy_{name}_1"),
                 InlineKeyboardButton(f"➕ Cart", callback_data=f"addcart_{name}_1")
             ])
+        else:
+            kb.append([
+                InlineKeyboardButton(f"❌ {name} +PW (Out of stock)", callback_data="noop")
+            ])
         msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     
     kb.append([InlineKeyboardButton("🔙 Back to Categories", callback_data="back_to_categories")])
+    
+    print(f"✅ Category callback completed, {len(kb)} buttons created")
     await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
 
+
 async def buy_product_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle buy button click - shows confirmation"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
+    data = query.data
     
-    data = query.data.replace("buy_", "")
+    print(f"🔍 BUY CALLBACK RECEIVED: {data}")
+    
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"❌ Error answering: {e}")
+    
+    # Remove "buy_" prefix
+    data = data.replace("buy_", "")
+    print(f"🔍 After removing buy_: {data}")
+    
     parts = data.rsplit("_", 1)
+    print(f"🔍 Parts: {parts}")
+    
     if len(parts) != 2:
+        print(f"❌ Invalid parts length: {len(parts)}")
         await query.answer("❌ Invalid product!", show_alert=True)
         return
     
     product_name, has_password = parts[0], int(parts[1])
+    print(f"🔍 Product: {product_name}, Has Password: {has_password}")
     
     if product_name not in IG_PRODUCTS:
+        print(f"❌ Product not found: {product_name}")
         await query.answer(f"❌ Product '{product_name}' not found!", show_alert=True)
         return
     
     price = get_product_price(product_name, has_password)
     stock_count = get_ig_stock_count(product_name, require_password=has_password)
+    print(f"🔍 Price: {price}, Stock: {stock_count}")
     
     if stock_count == 0:
         await query.answer("❌ Out of stock!", show_alert=True)
         return
     
     bal = get_balance(user_id)
+    print(f"🔍 Balance: {bal}")
+    
     if bal < price:
         await query.answer(f"❌ Insufficient funds! Need ₦{price}, you have ₦{bal}", show_alert=True)
         return
@@ -789,6 +839,7 @@ async def buy_product_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("✅ Confirm Purchase", callback_data=f"confirm_{product_name}_{has_password}")],
         [InlineKeyboardButton("❌ Cancel", callback_data="back_to_categories")]
     ]
+    
     await query.edit_message_text(
         f"🛒 **CONFIRM PURCHASE**\n\n"
         f"📦 {product_name} followers\n"
@@ -800,25 +851,45 @@ async def buy_product_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode='HTML'
     )
+    
+    print(f"✅ buy_product_callback completed successfully")
+
 
 async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle confirm purchase - processes the order"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
+    data = query.data
     
-    data = query.data.replace("confirm_", "")
+    print(f"🔍 CONFIRM CALLBACK RECEIVED: {data}")
+    
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"❌ Error answering: {e}")
+    
+    # Remove "confirm_" prefix
+    data = data.replace("confirm_", "")
+    print(f"🔍 After removing confirm_: {data}")
+    
     parts = data.rsplit("_", 1)
+    print(f"🔍 Parts: {parts}")
+    
     if len(parts) != 2:
+        print(f"❌ Invalid parts length: {len(parts)}")
         await query.answer("❌ Invalid product!", show_alert=True)
         return
     
     product_name, has_password = parts[0], int(parts[1])
+    print(f"🔍 Product: {product_name}, Has Password: {has_password}")
     
     if product_name not in IG_PRODUCTS:
+        print(f"❌ Product not found: {product_name}")
         await query.answer(f"❌ Product '{product_name}' not found!", show_alert=True)
         return
     
     price = get_product_price(product_name, has_password)
+    print(f"🔍 Price: {price}")
     
     if get_balance(user_id) < price:
         await query.answer("❌ Insufficient funds!", show_alert=True)
@@ -831,7 +902,9 @@ async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAUL
     
     item_id, email = item[0], item[1]
     password = item[2] if has_password else None
+    print(f"🔍 Item ID: {item_id}, Email: {email}, Password: {password}")
     
+    # Process purchase
     mark_ig_sold(item_id, user_id, require_password=has_password)
     update_wallet(user_id, -price)
     update_stat("revenue", price)
@@ -862,55 +935,69 @@ async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAUL
         f"💎 {MY_SIGNATURE}",
         parse_mode='Markdown'
     )
+    
+    print(f"✅ confirm_purchase_callback completed successfully")
+
 
 async def add_to_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle add to cart button click"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
+    data = query.data
     
-    data = query.data.replace("addcart_", "")
+    print(f"🔍 ADD TO CART CALLBACK STARTED")
+    print(f"🔍 Data: {data}")
+    
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"❌ Error answering: {e}")
+    
+    data = data.replace("addcart_", "")
     parts = data.rsplit("_", 1)
+    
     if len(parts) != 2:
+        print(f"❌ Invalid parts length: {len(parts)}")
+        await query.answer("❌ Invalid product!", show_alert=True)
         return
+    
     product_name, has_password = parts[0], int(parts[1])
+    print(f"🔍 Product: {product_name}, Has Password: {has_password}")
     
     if product_name not in IG_PRODUCTS:
+        print(f"❌ Product not found: {product_name}")
+        await query.answer("❌ Product not found!", show_alert=True)
         return
     
     price = get_product_price(product_name, has_password)
-    if get_ig_stock_count(product_name, require_password=has_password) == 0:
+    stock_count = get_ig_stock_count(product_name, require_password=has_password)
+    print(f"🔍 Price: {price}, Stock: {stock_count}")
+    
+    if stock_count == 0:
         await query.answer("❌ Out of stock!", show_alert=True)
         return
     
     add_to_cart(user_id, product_name, price, has_password)
     cart_count = len(get_cart(user_id))
     cart_total = get_cart_total(user_id)
+    
     await query.answer(f"✅ Added! 🛒 {cart_count} items | ₦{cart_total}", show_alert=True)
-
-async def back_to_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    kb = [
-        [InlineKeyboardButton("📧 Small", callback_data="cat_small")],
-        [InlineKeyboardButton("📧 Medium", callback_data="cat_medium")],
-        [InlineKeyboardButton("📧 Large", callback_data="cat_large")],
-        [InlineKeyboardButton("📦 All", callback_data="cat_all")]
-    ]
-    await query.edit_message_text(
-        "🛒 **BUY IG PRODUCTS**\n\n"
-        "Select category:\n"
-        "📧 Email Only | 🔐 Email + Password (+₦500)",
-        reply_markup=InlineKeyboardMarkup(kb),
-        parse_mode='HTML'
-    )
+    print(f"✅ add_to_cart_callback completed successfully")
 
 # =================================================================================
 # CART
 # =================================================================================
 
+# =================================================================================
+# CART - COMPLETE FIXED SECTION
+# =================================================================================
+
 async def view_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View user's cart"""
     user_id = update.message.from_user.id
     items = get_cart(user_id)
+    
+    print(f"🔍 VIEW CART: User {user_id}, Items: {len(items)}")
     
     if not items:
         kb = [[InlineKeyboardButton("🛒 Browse Products", callback_data="cat_all")]]
@@ -942,29 +1029,46 @@ async def view_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     kb.append([InlineKeyboardButton("🗑 Clear Cart", callback_data="clearcart")])
     kb.append([InlineKeyboardButton("🛒 Continue Shopping", callback_data="cat_all")])
+    
     await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+    print(f"✅ View cart completed")
+
 
 async def cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle cart management callbacks"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
     data = query.data
     
+    print(f"🔍 CART CALLBACK: {data}")
+    
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"❌ Error answering: {e}")
+    
+    # Remove from cart
     if data.startswith("rmcart_"):
         cart_id = int(data.replace("rmcart_", ""))
+        print(f"🔍 Removing cart item: {cart_id}")
         remove_from_cart(user_id, cart_id)
-        await view_cart(update, context)
+        # Refresh cart view
+        await view_cart_from_query(update, context)
         return
     
+    # Add quantity
     if data.startswith("qtyadd_"):
         cart_id = int(data.replace("qtyadd_", ""))
+        print(f"🔍 Adding quantity to: {cart_id}")
         cursor.execute("UPDATE ig_cart SET quantity=quantity+1 WHERE id=? AND user_id=?", (cart_id, user_id))
         conn.commit()
-        await view_cart(update, context)
+        await view_cart_from_query(update, context)
         return
     
+    # Remove quantity
     if data.startswith("qtysub_"):
         cart_id = int(data.replace("qtysub_", ""))
+        print(f"🔍 Removing quantity from: {cart_id}")
         cursor.execute("SELECT quantity FROM ig_cart WHERE id=? AND user_id=?", (cart_id, user_id))
         row = cursor.fetchone()
         if row and row[0] > 1:
@@ -972,22 +1076,81 @@ async def cart_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
         else:
             remove_from_cart(user_id, cart_id)
-        await view_cart(update, context)
+        await view_cart_from_query(update, context)
         return
     
+    # Clear cart
     if data == "clearcart":
+        print(f"🔍 Clearing cart")
         clear_cart(user_id)
         await query.edit_message_text("🛒 Cart cleared!")
         return
     
+    # Checkout
     if data == "checkout":
+        print(f"🔍 Checkout initiated")
         await checkout_cart(update, context)
         return
+    
+    # Unknown
+    print(f"❌ Unknown cart action: {data}")
+    await query.answer("❌ Unknown action!", show_alert=True)
+
+
+async def view_cart_from_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Refresh cart view from a query (callback)"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    items = get_cart(user_id)
+    
+    print(f"🔍 REFRESH CART: User {user_id}, Items: {len(items)}")
+    
+    if not items:
+        kb = [[InlineKeyboardButton("🛒 Browse Products", callback_data="cat_all")]]
+        await query.edit_message_text("🛒 Cart empty!", reply_markup=InlineKeyboardMarkup(kb))
+        return
+    
+    total = get_cart_total(user_id)
+    bal = get_balance(user_id)
+    msg = f"🛒 **YOUR CART**\n\n"
+    kb = []
+    
+    for item in items:
+        cart_id, pn, pr, qty, hp = item
+        type_text = "🔐" if hp else "📧"
+        msg += f"{type_text} {pn} followers\n   Qty: {qty} × ₦{pr} = ₦{pr*qty}\n\n"
+        kb.append([
+            InlineKeyboardButton(f"➕ Add more", callback_data=f"qtyadd_{cart_id}"),
+            InlineKeyboardButton(f"➖ Remove one", callback_data=f"qtysub_{cart_id}"),
+            InlineKeyboardButton(f"❌ Remove all", callback_data=f"rmcart_{cart_id}")
+        ])
+    
+    msg += f"━━━━━━━━━━━━━━━\n💰 **Total: ₦{total}**\n💳 Balance: ₦{bal}\n"
+    if total > 0:
+        if bal >= total:
+            msg += f"\n✅ You have enough funds!"
+            kb.append([InlineKeyboardButton("✅ CHECKOUT NOW", callback_data="checkout")])
+        else:
+            msg += f"\n⚠️ Insufficient! Need ₦{total - bal} more."
+    
+    kb.append([InlineKeyboardButton("🗑 Clear Cart", callback_data="clearcart")])
+    kb.append([InlineKeyboardButton("🛒 Continue Shopping", callback_data="cat_all")])
+    
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+    print(f"✅ Cart refreshed")
+
 
 async def checkout_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process checkout"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
+    
+    print(f"🔍 CHECKOUT STARTED for user {user_id}")
+    
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"❌ Error answering: {e}")
     
     items = get_cart(user_id)
     if not items:
@@ -995,15 +1158,19 @@ async def checkout_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     total = get_cart_total(user_id)
-    if get_balance(user_id) < total:
+    bal = get_balance(user_id)
+    print(f"🔍 Total: {total}, Balance: {bal}")
+    
+    if bal < total:
         await query.answer(f"❌ Need ₦{total}!", show_alert=True)
         return
     
     # Check stock for all items
     for item in items:
-        _, pn, _, _, hp = item
-        if get_ig_stock_count(pn, require_password=hp) < item[3]:
-            await query.edit_message_text(f"❌ Not enough stock for {pn}!")
+        cart_id, pn, pr, qty, hp = item
+        stock_count = get_ig_stock_count(pn, require_password=hp)
+        if stock_count < qty:
+            await query.edit_message_text(f"❌ Not enough stock for {pn}! ({stock_count} available, {qty} requested)")
             return
     
     delivered = []
@@ -1011,6 +1178,8 @@ async def checkout_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for item in items:
         cart_id, pn, pr, qty, hp = item
+        print(f"🔍 Processing: {pn}, Qty: {qty}, Has Password: {hp}")
+        
         for stock_item in get_ig_items(pn, qty, require_password=hp):
             mark_ig_sold(stock_item[0], user_id, require_password=hp)
             email = stock_item[1]
@@ -1027,6 +1196,8 @@ async def checkout_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     update_wallet(user_id, -total_spent)
     clear_cart(user_id)
+    
+    print(f"✅ Checkout complete! Total spent: {total_spent}")
     
     await query.edit_message_text(
         f"✅ **ORDER COMPLETE!**\n\n"
@@ -2306,15 +2477,37 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =================================================================================
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all callback queries from inline buttons"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
     data = query.data
+    
+    # ANSWER FIRST - Always!
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"❌ Error answering callback: {e}")
+    
+    # DEBUG - Print what we received
+    print(f"🔍 ===== CALLBACK RECEIVED =====")
+    print(f"🔍 User ID: {user_id}")
+    print(f"🔍 Data: {data}")
+    print(f"🔍 =============================")
+    
+    # ===== NOOP (Out of stock) =====
+    if data == "noop":
+        await query.answer("❌ Out of stock!", show_alert=True)
+        return
     
     # ===== BACK TO MAIN =====
     if data == "back_main":
         await query.message.delete()
         await start(update, context)
+        return
+    
+    # ===== BACK TO CATEGORIES =====
+    if data == "back_to_categories":
+        await back_to_categories(update, context)
         return
     
     # ===== PAYMENT =====
@@ -2327,24 +2520,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # ===== IG BUY - MUST BE EARLY! =====
     if data.startswith("buy_"):
+        print(f"✅ BUY DETECTED! Calling buy_product_callback...")
         await buy_product_callback(update, context)
         return
     
     if data.startswith("confirm_"):
+        print(f"✅ CONFIRM DETECTED! Calling confirm_purchase_callback...")
         await confirm_purchase_callback(update, context)
         return
     
-    # ===== IG CART =====
-    if data.startswith("addcart_") or data.startswith("rmcart_") or data.startswith("qtyadd_") or data.startswith("qtysub_") or data in ["clearcart", "checkout"]:
+    # ===== IG ADD TO CART =====
+    if data.startswith("addcart_"):
+        print(f"✅ ADDCART DETECTED! Calling add_to_cart_callback...")
+        await add_to_cart_callback(update, context)
+        return
+    
+    # ===== IG CART MANAGEMENT =====
+    if data.startswith("rmcart_") or data.startswith("qtyadd_") or data.startswith("qtysub_") or data in ["clearcart", "checkout"]:
+        print(f"✅ CART MANAGEMENT DETECTED! Calling cart_callback...")
         await cart_callback(update, context)
         return
     
     # ===== IG CATEGORIES =====
-    if data.startswith("cat_") or data == "back_to_categories":
-        if data == "back_to_categories":
-            await back_to_categories(update, context)
-        else:
-            await product_category_callback(update, context)
+    if data.startswith("cat_"):
+        print(f"✅ CATEGORY DETECTED! Calling product_category_callback...")
+        await product_category_callback(update, context)
         return
     
     # ===== REPORTS =====
@@ -2429,15 +2629,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ===== ADMIN - RESTOCK/CLEAR/EXTRACT =====
+    # ===== ADMIN - RESTOCK =====
     if data.startswith("restock_"):
         await restock_callback(update, context)
         return
     
+    # ===== ADMIN - CLEAR STOCK =====
     if data.startswith("clearstock_"):
         await clear_stock_callback(update, context)
         return
     
+    # ===== ADMIN - EXTRACT STOCK =====
     if data.startswith("extract_"):
         await extract_stock_callback(update, context)
         return
@@ -2452,7 +2654,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_panel(update, context)
         return
     
-    # ===== DEFAULT =====
+    # ===== UNKNOWN =====
+    print(f"❌ UNKNOWN CALLBACK: {data}")
     await query.answer("❓ Unknown command!", show_alert=True)
 
 # =================================================================================
